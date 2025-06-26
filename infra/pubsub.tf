@@ -14,16 +14,7 @@
  * limitations under the License.
  */
 
-terraform {
-  required_providers {
-    google = {
-      source  = "hashicorp/google"
-      version = "~> 5.0" 
-    }
-  }
-}
-
-provider "google" {
+resource "google_pubsub_topic" "continuous_query_topic" {
   project = var.project_id
-  region  = var.region
+  name    = var.pubsub_topic_id
 }
