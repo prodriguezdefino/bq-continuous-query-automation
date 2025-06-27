@@ -13,7 +13,7 @@ echo "Destroying Terraform-managed resources..."
 echo "You will be prompted to confirm the destruction by Terraform."
 echo ""
 
-terraform destroy -var="project_id=$TF_VAR_project_id"
+terraform destroy
 
 if [ $? -ne 0 ]; then
   echo "Error: Terraform destroy failed. Some resources may still exist."
