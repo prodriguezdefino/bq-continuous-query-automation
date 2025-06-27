@@ -47,7 +47,7 @@ EOF
 }
 
 locals {
-  bq_job_id = "${var.continuous_query_job_prefix}init5"
+  bq_job_id = "${var.continuous_query_job_prefix}init8"
 }
 
 resource "null_resource" "create_continuous_query_job" {
@@ -69,8 +69,8 @@ resource "null_resource" "create_continuous_query_job" {
           format = 'CLOUD_PUBSUB', \
           uri = 'https://pubsub.googleapis.com/projects/${var.project_id}/topics/${var.pubsub_topic_id}') \
         AS ( \
-        SELECT TO_JSON_STRING(STRUCT(message, timestamp)) AS message_payload \
-        FROM APPENDS(TABLE ${var.dataset_id}.${var.ingestion_table_id}, CURRENT_TIMESTAMP() - INTERVAL 1 SECOND));"
+        SELECT TO_JSON_STRING(t) AS message_payload \
+        FROM APPENDS(TABLE ${var.dataset_id}.${var.ingestion_table_id}, CURRENT_TIMESTAMP() - INTERVAL 1 SECOND) as t);"
     EOT
   }
 

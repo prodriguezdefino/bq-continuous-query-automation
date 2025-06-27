@@ -67,7 +67,15 @@ def restart_bq_continuous(event, context):
             is_cancelled = True
         # BigQuery internal errors sometimes use "STOPPED" for continuous queries that are effectively cancelled by the system
         elif job_status.get('state') == 'DONE' and job_status['error'].get('reason') == 'stopped':
-             is_cancelled = True
+            is_cancelled = True
+        # if the schema of the table has changed destructively we restart the CQ
+        elif job_status.get('state') == 'DONE' and \
+            'schema for table' in job_status['error']['message'].lower():
+            is_cancelled = True
+        # if the query plan has changed we restart as well
+        elif job_status.get('state') == 'DONE' and \
+            'query plan is changed' in job_status['error']['message'].lower():
+            is_cancelled = True
 
         if is_cancelled:
             print(f"Detected cancelled BigQuery job: {job_id}. Attempting to restart.")
