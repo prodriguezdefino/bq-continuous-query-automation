@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
- resource "google_logging_project_sink" "bq_job_error_sink" {
+resource "google_logging_project_sink" "bq_job_error_sink" {
   project = var.project_id
   name    = "bq_continuous_query_error_sink"
   # Filter for BigQuery job completion events, specifically for jobs with the defined prefix,
   # and that have an error status.
-  filter  = <<-EOT
+  filter = <<-EOT
 resource.type="bigquery_resource"
 protoPayload.methodName="jobservice.jobcompleted"
 protoPayload.serviceData.jobCompletedEvent.job.jobName.jobId:"${var.continuous_query_job_prefix}"

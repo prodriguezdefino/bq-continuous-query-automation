@@ -19,7 +19,7 @@ import json
 import os
 from google.cloud import bigquery
 
-def restart_bq_job(event, context):
+def restart_bq_continuous(event, context):
     """
     Cloud Function to restart a BigQuery job if it's found to be cancelled.
     Triggered by a Pub/Sub message from a log sink.

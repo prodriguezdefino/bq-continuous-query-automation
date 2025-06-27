@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
- resource "google_bigquery_dataset" "ingestion_dataset" {
-  project    = var.project_id
-  dataset_id = var.dataset_id
-  location   = var.region
+resource "google_bigquery_dataset" "ingestion_dataset" {
+  project     = var.project_id
+  dataset_id  = var.dataset_id
+  location    = var.bq_region
   description = "Dataset for ingesting data for the continuous query."
 }
 
@@ -46,52 +46,32 @@ EOF
   deletion_protection = false # Set to true for production environments
 }
 
-resource "google_bigquery_job" "continuous_query_job" {
-  project = var.project_id
-  location = var.region
-  job_id_prefix = var.continuous_query_job_prefix 
+locals {
+  bq_job_id = "${var.continuous_query_job_prefix}init1"
+}
 
-  query {
-    query = <<SQL
-CREATE OR REPLACE CONTINUOUS QUERY `${var.project_id}.${var.dataset_id}.${var.continuous_query_job_prefix}continuous_query`
-OPTIONS (
-  service_account = "${google_service_account.continuous_query_sa.email}",
-  interval = 15 MINUTE,  // How often the query runs
-  max_parallelism = 1    // Number of parallel executions
-)
-AS
-SELECT
-  message,
-  timestamp
-FROM
-  `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}`
-WHERE
-  timestamp > (SELECT MAX(timestamp) FROM `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}` WHERE _PARTITIONTIME = (SELECT MAX(_PARTITIONTIME) FROM `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}`))
-  OR
-  (SELECT MAX(timestamp) FROM `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}` WHERE _PARTITIONTIME = (SELECT MAX(_PARTITIONTIME) FROM `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}`)) IS NULL;
+resource "null_resource" "create_continuous_query_job" {
 
-EXPORT DATA OPTIONS(
-  uri = 'pubsub://${var.project_id}/${var.pubsub_topic_id}',
-  format = 'JSON'
-) AS
-SELECT
-  message,
-  timestamp
-FROM
-  `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}`
-WHERE
-  timestamp > (SELECT MAX(timestamp) FROM `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}` WHERE _PARTITIONTIME = (SELECT MAX(_PARTITIONTIME) FROM `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}`))
-  OR
-  (SELECT MAX(timestamp) FROM `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}` WHERE _PARTITIONTIME = (SELECT MAX(_PARTITIONTIME) FROM `${var.project_id}.${var.dataset_id}.${var.ingestion_table_id}`)) IS NULL;
-SQL
-    destination_table {
-      project_id = var.project_id
-      dataset_id = google_bigquery_dataset.ingestion_dataset.dataset_id
-      table_id   = "${var.continuous_query_job_prefix}output" # This is a dummy table, not actually used by continuous query with EXPORT DATA
-    }
-    create_disposition = "CREATE_IF_NEEDED"
-    write_disposition  = "WRITE_APPEND" # Not strictly necessary for continuous export but good practice
-    use_legacy_sql = false
+  triggers = {
+    "job_name" = local.bq_job_id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      bq query \
+        --project_id=${var.project_id} \
+        --job_id="${local.bq_job_id}" \
+        --use_legacy_sql=false \
+        --continuous \
+        --synchronous_mode=false \
+        --connection_property=service_account=${google_service_account.continuous_query_sa.email} \
+        "EXPORT DATA OPTIONS ( \
+          format = 'CLOUD_PUBSUB', \
+          uri = 'https://pubsub.googleapis.com/projects/${var.project_id}/topics/${var.pubsub_topic_id}') \
+        AS ( \
+        SELECT TO_JSON_STRING(STRUCT(message, timestamp)) AS message_payload \
+        FROM APPENDS(TABLE ${var.dataset_id}.${var.ingestion_table_id}, CURRENT_TIMESTAMP() - INTERVAL 1 SECOND));"
+    EOT
   }
 
   depends_on = [
@@ -100,7 +80,8 @@ SQL
     google_service_account.continuous_query_sa,
     google_project_iam_member.bq_table_reader,
     google_project_iam_member.bq_table_user,
-    google_pubsub_topic_iam_member.pubsub_publisher,
-    google_project_iam_member.bq_job_user
+    google_pubsub_topic_iam_member.pubsub_editor,
+    google_project_iam_member.bq_job_user,
+    google_bigquery_reservation_assignment.continuous_slots_assignment
   ]
 }

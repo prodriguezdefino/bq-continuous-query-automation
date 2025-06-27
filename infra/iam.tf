@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
+
 resource "google_service_account" "continuous_query_sa" {
   project      = var.project_id
   account_id   = var.service_account_id
@@ -33,12 +33,11 @@ resource "google_project_iam_member" "bq_table_user" {
   member  = "serviceAccount:${google_service_account.continuous_query_sa.email}"
 }
 
-
-# Grant permissions to write to the Pub/Sub topic
-resource "google_pubsub_topic_iam_member" "pubsub_publisher" {
+# Grant permissions to access to the Pub/Sub topic
+resource "google_pubsub_topic_iam_member" "pubsub_editor" {
   project = var.project_id
   topic   = google_pubsub_topic.continuous_query_topic.name
-  role    = "roles/pubsub.publisher"
+  role    = "roles/pubsub.editor"
   member  = "serviceAccount:${google_service_account.continuous_query_sa.email}"
 }
 

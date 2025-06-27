@@ -18,3 +18,9 @@ resource "google_pubsub_topic" "continuous_query_topic" {
   project = var.project_id
   name    = var.pubsub_topic_id
 }
+
+resource "google_pubsub_subscription" "continuous_query_subscription" {
+  project = var.project_id
+  topic   = google_pubsub_topic.continuous_query_topic.name
+  name    = "${var.pubsub_topic_id}-sub"
+}

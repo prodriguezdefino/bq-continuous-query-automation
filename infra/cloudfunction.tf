@@ -17,13 +17,13 @@
 data "archive_file" "function_source" {
   type        = "zip"
   source_dir  = "cloud_function/"
-  output_path = "/tmp/function_source.zip" 
+  output_path = "/tmp/function_source.zip"
 }
 
 resource "google_storage_bucket" "function_bucket" {
-  project = var.project_id
-  name    = "${var.project_id}-cf-source-bucket" # Bucket names must be globally unique
-  location = var.region
+  project                     = var.project_id
+  name                        = "${var.project_id}-cf-source-bucket" # Bucket names must be globally unique
+  location                    = var.region
   uniform_bucket_level_access = true
 }
 
@@ -33,39 +33,47 @@ resource "google_storage_bucket_object" "function_archive" {
   source = data.archive_file.function_source.output_path # Path to the zipped function source
 }
 
-resource "google_cloudfunctions_function" "job_restarter_function" {
-  project = var.project_id
-  name    = var.cloud_function_name
-  region  = var.region
-  runtime = "python311" 
+resource "google_cloudfunctions2_function" "query_restarter_function" {
+  project  = var.project_id
+  location = var.region
+  name     = var.cloud_function_name
 
-  description = "Restarts a BigQuery continuous query job if it fails with a 'cancelled' status."
-  entry_point = "restart_bq_job" # The function name in your Python code
+  build_config {
+    runtime     = "python311"
+    entry_point = "restart_bq_continuous"
+    source {
+      storage_source {
+        bucket = google_storage_bucket.function_bucket.name
+        object = google_storage_bucket_object.function_archive.name
+      }
+    }
+    environment_variables = {
+      GCP_PROJECT   = var.project_id
+      BQ_JOB_PREFIX = var.continuous_query_job_prefix
+    }
+  }
 
-  source_archive_bucket = google_storage_bucket.function_bucket.name
-  source_archive_object = google_storage_bucket_object.function_archive.name
+  service_config {
+    max_instance_count             = 1
+    min_instance_count             = 1
+    available_memory               = "256Mi"
+    timeout_seconds                = 60
+    service_account_email          = google_service_account.function_sa.email
+    ingress_settings               = "ALLOW_INTERNAL_ONLY"
+    all_traffic_on_latest_revision = true
+  }
 
   event_trigger {
-    event_type = "google.pubsub.topic.publish"
-    resource   = google_pubsub_topic.log_sink_topic.name 
+    trigger_region = var.region
+    event_type     = "google.cloud.pubsub.topic.v1.messagePublished"
+    pubsub_topic   = google_pubsub_topic.log_sink_topic.id
+    retry_policy   = "RETRY_POLICY_RETRY"
   }
-
-  environment_variables = {
-    GCP_PROJECT   = var.project_id
-    BQ_JOB_PREFIX = var.continuous_query_job_prefix
-  }
-
-  # Service account for the Cloud Function itself
-  # This SA needs permissions to:
-  # 1. Read from the Pub/Sub topic (trigger). This is usually granted by default.
-  # 2. Submit BigQuery jobs (to restart the continuous query).
-  # 3. (Optional) Write logs to Cloud Logging.
-  service_account_email = google_service_account.function_sa.email
 
   depends_on = [
     google_service_account.function_sa,
     google_project_iam_member.function_sa_bq_job_user,
-    google_pubsub_topic.log_sink_topic // Ensure topic exists before function creation
+    google_pubsub_topic.log_sink_topic
   ]
 }
 
@@ -83,20 +91,11 @@ resource "google_project_iam_member" "function_sa_bq_job_user" {
   member  = "serviceAccount:${google_service_account.function_sa.email}"
 }
 
-# Grant the Function SA permission to be invoked by Pub/Sub (via the log sink)
-# This is often implicitly handled or might need roles/cloudfunctions.invoker if you have strict IAM
-# For Pub/Sub triggers, the Cloud Functions service agent usually handles this.
-# However, explicit grant for the function's SA to use the topic is good practice.
-
 # Topic for the log sink to publish to, which triggers the Cloud Function
 resource "google_pubsub_topic" "log_sink_topic" {
   project = var.project_id
   name    = "${var.pubsub_topic_id}-logs" # e.g., tf_continuous_query_topic-logs
 }
-
-# Allow the Log Sink's writer identity to publish to this topic
-# This will be configured in the log_sink.tf file using the sink's writer identity output.
-# We define the topic here so the function can reference it.
 
 # Allow the Cloud Function service account to read from (be triggered by) this log topic
 resource "google_pubsub_topic_iam_member" "function_trigger_binding" {
@@ -117,5 +116,24 @@ resource "google_service_account_iam_member" "function_sa_token_creator" {
 }
 
 data "google_project" "project" {
- project_id = var.project_id
+  project_id = var.project_id
+}
+
+# --- IAM for Cloud Function V2 and Eventarc ---
+
+# 1. Grant the Function's Service Account `roles/eventarc.eventReceiver`
+# This allows the function's service account to receive events forwarded by Eventarc.
+resource "google_project_iam_member" "function_sa_event_receiver" {
+  project = var.project_id
+  role    = "roles/eventarc.eventReceiver"
+  member  = "serviceAccount:${google_service_account.function_sa.email}"
+}
+
+# 2. The Eventarc service agent also needs to be able to create service account tokens for the function's identity
+#    to impersonate it when invoking the function. This is `roles/iam.serviceAccountTokenCreator` on the function's service account.
+resource "google_service_account_iam_member" "eventarc_sa_token_creator_on_function_sa" {
+  service_account_id = google_service_account.function_sa.name // Fully qualified name for service_account_id
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-eventarc.iam.gserviceaccount.com"
+  depends_on         = [google_service_account.function_sa]
 }

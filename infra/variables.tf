@@ -25,6 +25,12 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "bq_region" {
+  description = "The region for the BQ resources."
+  type        = string
+  default     = "US"
+}
+
 variable "dataset_id" {
   description = "The ID of the BigQuery dataset."
   type        = string
@@ -59,4 +65,20 @@ variable "continuous_query_job_prefix" {
   description = "The prefix for the continuous query job ID."
   type        = string
   default     = "continuous_query_"
+}
+
+variable "max_reservation_slot_capacity" {
+  description = "The number of slots to allocate to the reservation. Minimum is 100 for FLEX."
+  type        = number
+  default     = 100
+}
+
+variable "reservation_edition" {
+  description = "The edition of BigQuery slots (STANDARD, ENTERPRISE, ENTERPRISE_PLUS). Relevant for non-FLEX commitments."
+  type        = string
+  default     = "ENTERPRISE_PLUS"
+  validation {
+    condition     = contains(["STANDARD", "ENTERPRISE", "ENTERPRISE_PLUS"], var.reservation_edition)
+    error_message = "Allowed values for reservation_edition are STANDARD, ENTERPRISE, ENTERPRISE_PLUS."
+  }
 }
