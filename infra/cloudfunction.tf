@@ -22,15 +22,15 @@ data "archive_file" "function_source" {
 
 resource "google_storage_bucket" "function_bucket" {
   project                     = var.project_id
-  name                        = "${var.project_id}-cf-source-bucket" # Bucket names must be globally unique
+  name                        = "${var.project_id}-cf-source-bucket"
   location                    = var.region
   uniform_bucket_level_access = true
 }
 
 resource "google_storage_bucket_object" "function_archive" {
-  name   = "source_code.zip#${data.archive_file.function_source.output_md5}" # Add MD5 to trigger updates on code change
+  name   = "source_code.zip#${data.archive_file.function_source.output_md5}"
   bucket = google_storage_bucket.function_bucket.name
-  source = data.archive_file.function_source.output_path # Path to the zipped function source
+  source = data.archive_file.function_source.output_path 
 }
 
 resource "google_cloudfunctions2_function" "query_restarter_function" {
@@ -80,7 +80,7 @@ resource "google_cloudfunctions2_function" "query_restarter_function" {
 # Service account for the Cloud Function to run as
 resource "google_service_account" "function_sa" {
   project      = var.project_id
-  account_id   = "${var.service_account_id}-cf" # Differentiate from the BQ SA
+  account_id   = "${var.service_account_id}-cf" 
   display_name = "Service Account for Cloud Function BQ Job Restarter"
 }
 
@@ -94,14 +94,13 @@ resource "google_project_iam_member" "function_sa_bq_job_user" {
 # Topic for the log sink to publish to, which triggers the Cloud Function
 resource "google_pubsub_topic" "log_sink_topic" {
   project = var.project_id
-  name    = "${var.pubsub_topic_id}-logs" # e.g., tf_continuous_query_topic-logs
+  name    = "${var.pubsub_topic_id}-logs" 
 }
 
-# Allow the Cloud Function service account to read from (be triggered by) this log topic
 resource "google_pubsub_topic_iam_member" "function_trigger_binding" {
   project = var.project_id
   topic   = google_pubsub_topic.log_sink_topic.name
-  role    = "roles/pubsub.subscriber" # Or a more specific role if available like roles/cloudfunctions.invoker on the function
+  role    = "roles/pubsub.subscriber" 
   member  = "serviceAccount:${google_service_account.function_sa.email}"
 }
 
@@ -111,12 +110,8 @@ resource "google_service_account_iam_member" "function_bq_continuous" {
   member             = "serviceAccount:${google_service_account.function_sa.email}"
 }
 
-# Also, the default Cloud Functions service agent for your project needs to be able to create tokens for the function's service account to impersonate it.
-# This is usually `service-[PROJECT_NUMBER]@gcf-admin-robot.iam.gserviceaccount.com`
-# And it needs the `roles/iam.serviceAccountTokenCreator` on the function's service account (`google_service_account.function_sa.email`).
-
 resource "google_service_account_iam_member" "function_sa_token_creator" {
-  service_account_id = google_service_account.function_sa.name // Fully qualified name
+  service_account_id = google_service_account.function_sa.name 
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:service-${data.google_project.project.number}@gcf-admin-robot.iam.gserviceaccount.com"
 }

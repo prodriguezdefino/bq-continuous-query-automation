@@ -17,6 +17,7 @@
 import base64
 import json
 import os
+import re
 import uuid
 
 import google.auth
@@ -60,7 +61,9 @@ def restart_bq_continuous(event, context):
         # Specific error messages for cancellation can vary. This is a general check.
         # You might need to refine this based on exact log messages.
         is_cancelled = False
-        if job_status['error'].get('message') and 'cancelled' in job_status['error']['message'].lower():
+        if job_status['error'].get('message') and \
+            'cancelled' in job_status['error']['message'].lower() and \
+                'user requested cancellation' not in job_status['error']['message'].lower():
             is_cancelled = True
         # BigQuery internal errors sometimes use "STOPPED" for continuous queries that are effectively cancelled by the system
         elif job_status.get('state') == 'DONE' and job_status['error'].get('reason') == 'stopped':
@@ -69,7 +72,6 @@ def restart_bq_continuous(event, context):
         if is_cancelled:
             print(f"Detected cancelled BigQuery job: {job_id}. Attempting to restart.")
             
-            # Get access token
             credentials, project = google.auth.default(
                 scopes=["https://www.googleapis.com/auth/cloud-platform"]
             )
@@ -78,41 +80,49 @@ def restart_bq_continuous(event, context):
             access_token = credentials.token
 
             original_query = job_config['query']
+            original_start_timestamp = "CURRENT_TIMESTAMP() - INTERVAL 1 SECOND"
+            end_timestamp = log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job']['jobStatistics']['endTime']
+
+            # Adjust the timestamp in the SQL query
+            timestamp_match = re.search(
+                r"\s*TIMESTAMP\(('.*?')\)(\s*\+ INTERVAL 1 MICROSECOND)?", original_query
+            )
+
+            if timestamp_match:
+                original_timestamp = timestamp_match.group(1)
+                new_timestamp = f"'{end_timestamp}'"
+                new_sql_query = original_query.replace(original_timestamp, new_timestamp)
+            elif original_start_timestamp in original_query:
+                new_timestamp = f"TIMESTAMP('{end_timestamp}') + INTERVAL 1 MICROSECOND"
+                new_sql_query = original_query.replace(original_start_timestamp, new_timestamp)
+
             new_job_id = bq_job_prefix + str(uuid.uuid4())[:8]   
             service_account = log_entry['protoPayload']['authenticationInfo']['principalEmail']
 
-            # API endpoint
             url = f"https://bigquery.googleapis.com/bigquery/v2/projects/{project}/jobs"
-            # Request headers
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             }
 
             try:
-                # Request payload
                 data = {
                     "configuration": {
                         "query": {
-                            "query": original_query,
+                            "query": new_sql_query,
                             "useLegacySql": False,
                             "continuous": True,
                             "connectionProperties": [
                                 {"key": "service_account", "value": service_account}
                             ],
-                            # ... other query parameters ...
                         },
                     },
                     "jobReference": {
                         "projectId": project,
-                        "jobId": new_job_id,  # Use the generated job ID here
+                        "jobId": new_job_id,  
                     },
                 }
-
-                # Make the API request
                 response = requests.post(url, headers=headers, json=data)
-
-                # Handle the response
                 if response.status_code == 200:
                     print(f"Continuous query job successfully created with job ID {new_job_id}.")
                 else:

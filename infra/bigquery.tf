@@ -43,7 +43,7 @@ resource "google_bigquery_table" "ingestion_table" {
 ]
 EOF
 
-  deletion_protection = false # Set to true for production environments
+  deletion_protection = false 
 }
 
 locals {

@@ -29,7 +29,7 @@ resource "google_project_iam_member" "bq_table_reader" {
 
 resource "google_project_iam_member" "bq_table_user" {
   project = var.project_id
-  role    = "roles/bigquery.user" # Required to read table data & metadata
+  role    = "roles/bigquery.user" 
   member  = "serviceAccount:${google_service_account.continuous_query_sa.email}"
 }
 
