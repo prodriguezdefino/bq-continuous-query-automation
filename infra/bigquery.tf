@@ -47,7 +47,7 @@ EOF
 }
 
 locals {
-  bq_job_id = "${var.continuous_query_job_prefix}init1"
+  bq_job_id = "${var.continuous_query_job_prefix}init5"
 }
 
 resource "null_resource" "create_continuous_query_job" {

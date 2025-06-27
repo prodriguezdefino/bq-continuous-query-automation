@@ -17,7 +17,11 @@
 import base64
 import json
 import os
-from google.cloud import bigquery
+import uuid
+
+import google.auth
+import google.auth.transport.requests
+import requests
 
 def restart_bq_continuous(event, context):
     """
@@ -41,13 +45,12 @@ def restart_bq_continuous(event, context):
        'jobStatus' in log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job'] and \
        'error' in log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job']['jobStatus'] and \
        'jobConfiguration' in log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job'] and \
-       'query' in log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job']['jobConfiguration'] and \
-       'queryDestinationTable' in log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job']['jobConfiguration']['query']:
+       'query' in log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job']['jobConfiguration']:
 
         job_status = log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job']['jobStatus']
         job_id = log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job']['jobName']['jobId']
         job_config = log_entry['protoPayload']['serviceData']['jobCompletedEvent']['job']['jobConfiguration']['query']
-
+      
         # Check if the job ID matches our continuous query prefix
         if not job_id.startswith(bq_job_prefix):
             print(f"Job ID {job_id} does not match prefix {bq_job_prefix}. Ignoring.")
@@ -63,37 +66,57 @@ def restart_bq_continuous(event, context):
         elif job_status.get('state') == 'DONE' and job_status['error'].get('reason') == 'stopped':
              is_cancelled = True
 
-
         if is_cancelled:
             print(f"Detected cancelled BigQuery job: {job_id}. Attempting to restart.")
-
-            client = bigquery.Client(project=project_id)
             
-            original_query = job_config['query']
-            destination_table_ref_proto = job_config['queryDestinationTable']
-            destination_dataset_id = destination_table_ref_proto['datasetId']
-            destination_table_id = destination_table_ref_proto['tableId']
-            
-            # Construct the job configuration for restart
-            # We reuse the original query and its settings.
-            # The continuous query name is embedded in the DDL.
-            
-            job_config_restart = bigquery.QueryJobConfig(
-                create_disposition=job_config.get('createDisposition', 'CREATE_IF_NEEDED'),
-                write_disposition=job_config.get('writeDisposition', 'WRITE_APPEND'),
-                use_legacy_sql=job_config.get('useLegacySql', False),
-                # Ensure the destination is set, even if it's a dummy for EXPORT DATA
-                destination=client.dataset(destination_dataset_id, project=project_id).table(destination_table_id)
+            # Get access token
+            credentials, project = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
             )
+            request = google.auth.transport.requests.Request()
+            credentials.refresh(request)
+            access_token = credentials.token
+
+            original_query = job_config['query']
+            new_job_id = bq_job_prefix + str(uuid.uuid4())[:8]   
+            service_account = log_entry['protoPayload']['authenticationInfo']['principalEmail']
+
+            # API endpoint
+            url = f"https://bigquery.googleapis.com/bigquery/v2/projects/{project}/jobs"
+            # Request headers
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
 
             try:
-                # For continuous queries, we re-run the CREATE OR REPLACE CONTINUOUS QUERY statement
-                query_job = client.query(original_query, job_config=job_config_restart, job_id_prefix=bq_job_prefix)
-                print(f"Restarted BigQuery job with new job ID: {query_job.job_id}. Query: \n{original_query}")
-                # Wait for the job to complete (optional, good for debugging)
-                # query_job.result() 
-                # print(f"Restart job {query_job.job_id} completed with state: {query_job.state}")
+                # Request payload
+                data = {
+                    "configuration": {
+                        "query": {
+                            "query": original_query,
+                            "useLegacySql": False,
+                            "continuous": True,
+                            "connectionProperties": [
+                                {"key": "service_account", "value": service_account}
+                            ],
+                            # ... other query parameters ...
+                        },
+                    },
+                    "jobReference": {
+                        "projectId": project,
+                        "jobId": new_job_id,  # Use the generated job ID here
+                    },
+                }
 
+                # Make the API request
+                response = requests.post(url, headers=headers, json=data)
+
+                # Handle the response
+                if response.status_code == 200:
+                    print(f"Continuous query job successfully created with job ID {new_job_id}.")
+                else:
+                    print(f"Error creating new continuous query job: {response.text}")
             except Exception as e:
                 print(f"Error restarting BigQuery job {job_id}: {e}")
         else:
